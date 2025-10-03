@@ -1,44 +1,42 @@
 const express = require('express');
-const router = express.Router();
-const Agent = require('../models/Agent');
-const Status = require('../models/Status');
-const auth = require('../middleware/auth');
 
-router.get('/team/:teamId', auth, async (req, res) => {
-  try {
-    const agents = await Agent.findByTeam(parseInt(req.params.teamId));
-    res.json({ success:true, teamId: parseInt(req.params.teamId), agents, count: agents.length });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ success:false, error:'Failed to get team agents' });
-  }
-});
+module.exports = (db) => {
+  const router = express.Router();
 
-router.put('/:agentCode/status', auth, async (req, res) => {
-  try {
-    const valid = ['Available','Busy','Break','Offline'];
-    if (!valid.includes(req.body.status)) return res.status(400).json({ success:false, error:`Invalid status: ${req.body.status}` });
+  // ดึง agent ทั้งหมด
+  router.get('/', (req, res) => {
+    db.all('SELECT * FROM agents ORDER BY id DESC', [], (err, rows) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({ success: true, data: rows });
+    });
+  });
 
-    const agent = await Agent.findByCode(req.params.agentCode.toUpperCase());
-    if (!agent) return res.status(404).json({ success:false, error:'Agent not found' });
+  // เพิ่ม agent
+  router.post('/', (req, res) => {
+    const { name, status } = req.body;
+    db.run(
+      'INSERT INTO agents (name, status) VALUES (?, ?)',
+      [name, status || 'offline'],
+      function (err) {
+        if (err) return res.status(500).json({ success: false, error: err.message });
+        res.status(201).json({ success: true, id: this.lastID });
+      }
+    );
+  });
 
-    const doc = await Status.create({ agentCode: req.params.agentCode.toUpperCase(), status: req.body.status, timestamp:new Date(), teamId: agent.team_id });
-    res.json({ success:true, data:{ agentCode: doc.agentCode, status: doc.status, timestamp: doc.timestamp, teamId: doc.teamId } });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ success:false, error:'Failed to update status' });
-  }
-});
+  // อัพเดตสถานะ
+  router.put('/:id', (req, res) => {
+    const { status } = req.body;
+    db.run(
+      `UPDATE agents SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [status, req.params.id],
+      function (err) {
+        if (err) return res.status(500).json({ success: false, error: err.message });
+        if (this.changes === 0) return res.status(404).json({ success: false, error: 'Agent not found' });
+        res.json({ success: true, updated: this.changes });
+      }
+    );
+  });
 
-router.get('/:agentCode/history', auth, async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit || '50');
-    const list = await Status.find({ agentCode: req.params.agentCode.toUpperCase() }).sort({ timestamp:-1 }).limit(limit).lean();
-    res.json({ success:true, agentCode: req.params.agentCode.toUpperCase(), history:list, count:list.length });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ success:false, error:'Failed to get agent history' });
-  }
-});
-
-module.exports = router;
+  return router;
+};
